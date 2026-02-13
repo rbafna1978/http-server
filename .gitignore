@@ -1,0 +1,31 @@
+# Build artifacts
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+compile_commands.json
+Testing/
+
+# Binaries and objects
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+http-server
+tests
+
+# Logs and runtime files
+*.log
+*.tmp
+*.swp
+
+# macOS
+.DS_Store
+
