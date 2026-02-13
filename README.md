@@ -1,211 +1,158 @@
-# Multithreaded HTTP Server
+# Multithreaded HTTP Server in C++17
 
-> High-performance HTTP/1.1 web server built from scratch in C++ using POSIX sockets
+A production-style HTTP/1.1 static file server built from scratch using POSIX sockets, modern C++ concurrency primitives, and a work-stealing thread pool.
 
-## 🚧 Status: Work in Progress
+## Highlights
 
-This project is currently under active development. Expected completion: **February 2026**
+- HTTP/1.1 request parsing with partial read handling
+- Persistent connections (`keep-alive`) and pipelined request support
+- RAII socket wrapper with robust POSIX error propagation (`errno` + `strerror`)
+- Work-stealing thread pool (`owner pop` + `cross-thread steal`)
+- Static file serving with directory traversal protection
+- LRU file cache for frequently accessed assets
+- Request safety limits:
+  - Max header section: 8 KB
+  - Max URI length: 2048 bytes
+  - Max body size: 10 MB
+  - Connection idle timeout: 60 seconds
+  - Per-IP connection cap: 100
+- Thread-safe logging with timestamped output
+- Unit tests using Google Test
 
-## 📋 Overview
+## Architecture
 
-A production-grade HTTP/1.1 web server implemented from scratch in C++ using POSIX sockets, featuring a custom thread pool with work-stealing queue and lock-free request parsing. Built to handle 1000+ concurrent connections with high throughput.
-
-## ✨ Planned Features
-
-- [x] Project architecture design
-- [x] POSIX socket setup
-- [ ] HTTP/1.1 protocol parser
-- [ ] Thread pool with work-stealing queue
-- [ ] Connection pooling & keep-alive
-- [ ] Static file serving
-- [ ] Request routing
-- [ ] Lock-free request parsing
-- [ ] Performance benchmarking with ApacheBench
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────┐
-│              Client Connections                  │
-│  (HTTP Requests via TCP)                        │
-└────────────┬────────────────────────────────────┘
-             │
-      ┌──────▼──────┐
-      │  Acceptor   │  ← Main thread accepts connections
-      │   Thread    │
-      └──────┬──────┘
-             │
-      ┌──────▼──────────────────────────────────┐
-      │         Thread Pool                      │
-      │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐  │
-      │  │ W1   │ │ W2   │ │ W3   │ │ W4   │  │
-      │  └──┬───┘ └──┬───┘ └──┬───┘ └──┬───┘  │
-      │     │        │        │        │        │
-      │  ┌──▼────────▼────────▼────────▼─────┐ │
-      │  │    Work-Stealing Task Queue       │ │
-      │  └───────────────────────────────────┘ │
-      └──────────────────────────────────────────┘
-             │
-      ┌──────▼──────┐
-      │   Request   │  ← Parse HTTP, route, respond
-      │   Handler   │
-      └──────┬──────┘
-             │
-      ┌──────▼──────┐
-      │  Response   │  ← Send response back
-      └─────────────┘
+```mermaid
+flowchart LR
+    C["Client"] --> A["Acceptor / Event Loop"]
+    A --> T["Work-Stealing Thread Pool"]
+    T --> P["HTTP Parser"]
+    P --> H["Request Handler (Static Files)"]
+    H --> R["HTTP Response Serializer"]
+    R --> C
 ```
 
-**Key Components:**
-- **Acceptor Thread:** Accepts new connections, delegates to workers
-- **Worker Threads:** Process requests from work queue
-- **Work-Stealing Queue:** Lock-free deque for load balancing
-- **HTTP Parser:** Zero-copy parsing of HTTP requests
-- **File Cache:** In-memory cache for frequently accessed static files
+## Repository Structure
 
-## 🛠️ Tech Stack
-
-- **Language:** C++ 17
-- **Networking:** POSIX sockets (Berkeley sockets)
-- **Threading:** `std::thread`, `std::mutex`, atomics
-- **Build System:** CMake
-- **Testing:** Google Test
-- **Benchmarking:** ApacheBench (ab)
-
-## 📖 Supported HTTP Features
-
-**HTTP/1.1 Protocol:**
-- GET and POST methods
-- Persistent connections (keep-alive)
-- Chunked transfer encoding
-- Common headers (Host, User-Agent, Content-Length, etc.)
-
-**Server Features:**
-- Static file serving
-- MIME type detection
-- Directory listing (optional)
-- 404/500 error pages
-- Request logging
-
-**Example Request/Response:**
-```http
-GET /index.html HTTP/1.1
-Host: localhost:8080
-Connection: keep-alive
-
-HTTP/1.1 200 OK
-Content-Type: text/html
-Content-Length: 1234
-Connection: keep-alive
-
-<!DOCTYPE html>
-<html>...
+```text
+http-server/
+├── CMakeLists.txt
+├── README.md
+├── src/
+│   ├── main.cpp
+│   ├── server/        # Socket, Acceptor, HttpServer
+│   ├── threadpool/    # ThreadPool, WorkStealingQueue, Task
+│   ├── http/          # Request/Response/Parser/Constants
+│   ├── handlers/      # Request, File, Error handlers
+│   └── utils/         # Logger, FileCache
+├── tests/
+│   ├── test_parser.cpp
+│   ├── test_threadpool.cpp
+│   └── test_server.cpp
+└── public/
+    └── index.html
 ```
 
-## 🎯 Performance Goals
+## Build
 
-- **Throughput:** 25K requests/sec on commodity hardware
-- **Concurrent Connections:** 1000+ simultaneous connections
-- **Latency:** Sub-10ms average response time for cached files
-- **CPU Efficiency:** Near-linear scaling with thread count
+### Prerequisites
 
-## 🚀 Thread Pool Design
+- C++17-compatible compiler (`clang++` or `g++`)
+- CMake `>= 3.14`
+- POSIX-compatible OS (Linux/macOS)
+- Google Test (for tests)
 
-**Work-Stealing Queue:**
-Each worker thread has its own deque. When idle, workers "steal" tasks from other workers' queues.
-
-**Benefits:**
-- Reduces lock contention (each thread owns its queue)
-- Automatic load balancing
-- Better cache locality (threads process related tasks)
-
-**Implementation:**
-```cpp
-class WorkStealingQueue {
-    std::deque<Task> tasks;
-    std::mutex mutex;
-    
-public:
-    void push(Task t);           // Owner pushes to back
-    Task pop();                  // Owner pops from back (LIFO)
-    Task steal();                // Other threads steal from front (FIFO)
-};
-```
-
-## 📝 Implementation Roadmap
-
-**Phase 1: Basic Server (Week 1)**
-- Socket setup and accept loop
-- Basic HTTP parser
-- Single-threaded request handling
-
-**Phase 2: Thread Pool (Week 2)**
-- Worker thread creation
-- Work-stealing queue implementation
-- Connection delegation
-
-**Phase 3: HTTP Features (Week 3)**
-- Static file serving
-- Persistent connections
-- Request routing
-- Error handling
-
-**Phase 4: Optimization (Week 4)**
-- Lock-free parsing
-- File caching
-- ApacheBench testing
-- Performance tuning
-
-## 🚀 Quick Start (Coming Soon)
-
-Once complete, running the server:
+### Compile
 
 ```bash
-# Build
-mkdir build && cd build
-cmake ..
-make
-
-# Run
-./http-server --port 8080 --threads 4 --root /var/www
-
-# Test
-curl http://localhost:8080/index.html
+mkdir -p build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake --build . -j
 ```
 
-## 📊 Benchmark Results (Coming Soon)
+## Run
 
-Performance on commodity hardware (8-core CPU, 16GB RAM):
+### Thread-pool mode
 
 ```bash
-ab -n 100000 -c 1000 http://localhost:8080/index.html
+./http-server --port 8080 --threads 8 --root ../public
 ```
 
-| Metric | Target |
-|--------|--------|
-| Requests/sec | 25,000+ |
-| Time per request (mean) | <1ms |
-| Time per request (across all) | <40ms |
-| Failed requests | 0 |
+### kqueue mode (macOS/BSD)
 
-## 📚 Key Concepts
+```bash
+./http-server --port 8080 --threads 8 --root ../public --kqueue
+```
 
-**epoll/select for I/O Multiplexing:**
-Efficiently handle 1000+ connections without 1000 threads.
+### Command-line options
 
-**Zero-Copy Parsing:**
-Parse HTTP headers in-place without copying strings.
+- `--port <num>`: server port (default `8080`)
+- `--threads <num>`: worker threads (default `hardware_concurrency`)
+- `--root <path>`: document root (default `./public`)
+- `--kqueue`: use event-loop mode on macOS/BSD
 
-**Work-Stealing:**
-Better load balancing than traditional work queues.
+## Test
 
-**Lock-Free Programming:**
-Atomics and memory ordering for thread safety without locks.
+```bash
+cd build
+cmake -DBUILD_TESTS=ON ..
+cmake --build . -j
+ctest --output-on-failure
+```
 
-## 📧 Contact
+## Benchmark
 
-Questions? Reach out at bafnarishit@gmail.com
+### ApacheBench examples
 
----
+```bash
+ab -n 100000 -c 100 http://127.0.0.1:8080/index.html
+ab -n 100000 -c 1000 -k http://127.0.0.1:8080/index.html
+```
 
-**Last Updated:** February 2026
+### Pipelining sanity check
+
+```bash
+printf 'GET /index.html HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\nGET /index.html HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' | nc 127.0.0.1 8080
+```
+
+### Example local results
+
+For `/index.html` (~644 bytes), keep-alive enabled:
+
+| Concurrency | Requests | Req/sec (mean) | Mean latency | Max latency |
+|---|---:|---:|---:|---:|
+| 100 | 100000 | 25473.22 | 3.926 ms | 5 ms |
+| 500 | 100000 | 25515.46 | 19.596 ms | 25 ms |
+| 1000 | 100000 | 25277.34 | 39.561 ms | 49 ms |
+
+## Security and Robustness
+
+- Path traversal prevention (`..` rejection + canonical path checks)
+- Static files constrained to configured document root
+- Max file size served: `10 MB`
+- Graceful handling for malformed requests (`400`)
+- Connection and parsing limits to prevent unbounded memory growth
+
+## Logging
+
+```text
+[2026-02-13 14:30:45] GET /index.html 200
+```
+
+## Troubleshooting
+
+### `socket: Too many open files (24)`
+
+```bash
+ulimit -n 20000
+```
+
+### Port already in use
+
+```bash
+./http-server --port 9090 --threads 8 --root ../public
+```
+
+## License
+
+Add your preferred license in `LICENSE` (e.g., MIT, Apache-2.0).
